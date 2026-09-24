@@ -28,5 +28,11 @@ go.work.sum
 .env
 
 # Editor/IDE
-# .idea/
+.idea/
 # .vscode/
+
+# Release artifacts (goreleaser)
+dist/
+
+# Build output
+bin/
