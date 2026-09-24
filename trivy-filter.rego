@@ -11,7 +11,6 @@ ignore {
 
 ignore {
     ignored_cves := {
-        "GO-2026-5932" # golang.org/x/crypto deprecation of the obsolete package (openpgp)
     }
     ignored_cves[input.VulnerabilityID]
 }
