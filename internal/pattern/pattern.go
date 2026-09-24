@@ -28,6 +28,34 @@ type Pattern struct {
 	prefix string
 	suffix string
 	pad    int
+	// numberInName is true when the placeholder sits in the last path
+	// segment, so rendered file names are unique per index.
+	numberInName bool
+}
+
+// baseName returns the last path segment of rawURL, ignoring the query.
+func baseName(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return path.Base(rawURL)
+	}
+	return path.Base(u.Path)
+}
+
+// URL renders the template for index n.
+func (p *Pattern) URL(n int) string {
+	return p.prefix + fmt.Sprintf("%0*d", p.pad, n) + p.suffix
+}
+
+// FileName returns the file name for index n: the last path segment of the
+// rendered URL, prefixed with the index when the placeholder is elsewhere
+// (for example https://host/id/{n}/200/300 yields 7_300).
+func (p *Pattern) FileName(n int) string {
+	base := baseName(p.URL(n))
+	if p.numberInName {
+		return base
+	}
+	return fmt.Sprintf("%0*d_%s", p.pad, n, base)
 }
 
 // Parse validates the template and returns a Pattern.
@@ -66,20 +94,6 @@ func Parse(template string) (*Pattern, error) {
 	if sample.Path == "" || strings.HasSuffix(sample.Path, "/") {
 		return nil, errors.New("template path must end in a file name")
 	}
+	p.numberInName = baseName(p.URL(0)) != baseName(p.URL(1))
 	return p, nil
-}
-
-// URL renders the template for index n.
-func (p *Pattern) URL(n int) string {
-	return p.prefix + fmt.Sprintf("%0*d", p.pad, n) + p.suffix
-}
-
-// FileName returns the last path segment of the rendered URL for index n,
-// ignoring any query string.
-func (p *Pattern) FileName(n int) string {
-	u, err := url.Parse(p.URL(n))
-	if err != nil {
-		return path.Base(p.URL(n))
-	}
-	return path.Base(u.Path)
 }

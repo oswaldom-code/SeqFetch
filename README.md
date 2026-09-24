@@ -106,6 +106,9 @@ Behaviour:
   index at a time (`start-1`, `start-2`, ...) downloading what it finds, until
   an index is missing. Use it when you know one file in the middle of the
   sequence but not where it begins.
+- Files are named after the last path segment of the URL. When the
+  placeholder is somewhere else (`https://host/id/{n}/200/300`) the index is
+  prefixed to keep names unique: `10_300`, `11_300`, ...
 - Files already present in the download directory are skipped without a
   request, so re-running the same command resumes an interrupted download.
 - Non-404 errors (5xx, network) are reported, do not stop the run, and make

@@ -28,6 +28,18 @@ var _ = Describe("Parse", func() {
 		Expect(p.FileName(3)).To(Equal("part-03.zip"))
 	})
 
+	DescribeTable("prefixes the file name with the index when the placeholder is not in the last segment",
+		func(template string, n int, want string) {
+			p, err := pattern.Parse(template)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(p.FileName(n)).To(Equal(want))
+		},
+		Entry("middle path segment", "https://picsum.photos/id/{n}/200/300", 10, "10_300"),
+		Entry("middle segment with padding", "https://host.com/item/{n:03}/file.bin", 7, "007_file.bin"),
+		Entry("query string", "https://host.com/download.pdf?id={n}", 7, "7_download.pdf"),
+		Entry("host name", "https://cdn{n}.host.com/asset.js", 2, "2_asset.js"),
+	)
+
 	DescribeTable("rejects invalid templates",
 		func(template string, msg string) {
 			_, err := pattern.Parse(template)
