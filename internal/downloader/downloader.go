@@ -180,7 +180,7 @@ func (d *Downloader) worker(ctx context.Context, p *pattern.Pattern, bound *atom
 // indices have been issued or ctx is cancelled, counting them in *issued.
 // Every write to *issued happens before jobs is closed, so the caller may
 // read it once the workers have exited. Indices already in flight when a
-// miss is detected still finish.
+// miss is detected still finish; runForward discards what they wrote.
 func produce(ctx context.Context, start, budget int, bound *atomic.Int64, jobs chan<- int, issued *int) {
 	defer close(jobs)
 	for n := start; *issued < budget && int64(n) <= bound.Load(); n++ {
@@ -193,9 +193,24 @@ func produce(ctx context.Context, start, budget int, bound *atomic.Int64, jobs c
 	}
 }
 
+// discard removes the file written for an index past the first missing
+// one (it was already in flight when the miss was detected) so the output
+// directory holds only the contiguous run, and undoes its count.
+func (d *Downloader) discard(p *pattern.Pattern, s *Summary, n int) {
+	name := p.FileName(n)
+	if err := os.Remove(filepath.Join(d.OutDir, name)); err != nil {
+		s.Failures = append(s.Failures, err)
+		fmt.Fprintf(d.out(), "FAIL  %s\n", err)
+		return
+	}
+	s.Downloaded--
+	fmt.Fprintf(d.out(), "DROP  %s (past the first missing index)\n", name)
+}
+
 // runForward downloads start, start+1, ... concurrently until the first
-// missing index or until budget indices have been issued. It reports
-// whether a missing index was reached.
+// missing index or until budget indices have been issued. Files downloaded
+// for indices past that miss are discarded. It reports whether a missing
+// index was reached.
 func (d *Downloader) runForward(ctx context.Context, p *pattern.Pattern, start, budget int, s *Summary) (reachedMiss bool) {
 	var bound atomic.Int64
 	bound.Store(math.MaxInt64)
@@ -218,8 +233,17 @@ func (d *Downloader) runForward(ctx context.Context, p *pattern.Pattern, start, 
 		close(results)
 	}()
 
+	var downloaded []int
 	for r := range results {
 		d.report(p, s, r)
+		if r.err == nil && !r.notFound && !r.skipped {
+			downloaded = append(downloaded, r.n)
+		}
+	}
+	for _, n := range downloaded {
+		if int64(n) > bound.Load() {
+			d.discard(p, s, n)
+		}
 	}
 	s.StoppedAt = min(int(bound.Load()), start+issued)
 	return bound.Load() != math.MaxInt64

@@ -1,8 +1,5 @@
 <p>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-wordmark-on-dark.svg">
-    <img src="assets/logo-wordmark.svg" alt="SeqFetch" width="320">
-  </picture>
+  <img src="assets/banner.svg" alt="SeqFetch: download whole series of numbered files from one URL template" width="100%">
 </p>
 
 # SeqFetch
@@ -99,6 +96,8 @@ Behaviour:
 
 - Stops at the first index that returns HTTP 404 or 403. With several workers
   a few extra `MISS` lines may appear for requests that were already in flight.
+  If one of those in-flight requests succeeds, its file is removed and reported
+  as `DROP`, so the output directory only ever holds the contiguous run.
 - `--limit N` stops after N indices have been processed (misses and skipped
   files count too), sharing the budget between the backward walk and the
   forward run. Handy to check a template before a long download.
