@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -132,6 +133,46 @@ var _ = Describe("Run", func() {
 		Expect(s.Downloaded).To(Equal(2))
 		Expect(s.StoppedAt).To(Equal(3))
 		Expect(s.Failures).To(BeEmpty())
+	})
+
+	It("discards a file downloaded for an index past the first miss", func() {
+		// Index 4 is requested while 3 is still in flight; 3 then answers
+		// 404 and only afterwards does 4 complete with a body.
+		started4 := make(chan struct{})
+		missed3 := make(chan struct{})
+		srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n, _ := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/f/"), ".txt"))
+			switch {
+			case n == 3:
+				<-started4
+				http.NotFound(w, r)
+				close(missed3)
+			case n == 4:
+				close(started4)
+				<-missed3
+				fmt.Fprintf(w, "file %d", n)
+			case n < 3:
+				fmt.Fprintf(w, "file %d", n)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		p, err := pattern.Parse(srv.URL + "/f/{n}.txt")
+		Expect(err).NotTo(HaveOccurred())
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		d := &downloader.Downloader{Workers: 2, OutDir: outDir, Out: &out}
+		s, err := d.Run(ctx, p, 1)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(s.Downloaded).To(Equal(2))
+		Expect(s.StoppedAt).To(Equal(3))
+		Expect(s.Failures).To(BeEmpty())
+		expectFiles(1, 2)
+		Expect(filepath.Join(outDir, "4.txt")).NotTo(BeAnExistingFile())
+		Expect(out.String()).To(ContainSubstring("OK    4.txt"))
+		Expect(out.String()).To(ContainSubstring("DROP  4.txt (past the first missing index)"))
 	})
 
 	It("skips files that already exist without requesting them", func() {

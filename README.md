@@ -99,6 +99,8 @@ Behaviour:
 
 - Stops at the first index that returns HTTP 404 or 403. With several workers
   a few extra `MISS` lines may appear for requests that were already in flight.
+  If one of those in-flight requests succeeds, its file is removed and reported
+  as `DROP`, so the output directory only ever holds the contiguous run.
 - `--limit N` stops after N indices have been processed (misses and skipped
   files count too), sharing the budget between the backward walk and the
   forward run. Handy to check a template before a long download.
