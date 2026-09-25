@@ -1,8 +1,5 @@
 <p>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-wordmark-on-dark.svg">
-    <img src="assets/logo-wordmark.svg" alt="SeqFetch" width="320">
-  </picture>
+  <img src="assets/banner.svg" alt="SeqFetch: download whole series of numbered files from one URL template" width="100%">
 </p>
 
 # SeqFetch
