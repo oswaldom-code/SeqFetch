@@ -41,7 +41,15 @@ func runFetch(cmd *cobra.Command, template string, start, workers, limit int, de
 	fmt.Fprintf(cmd.OutOrStdout(), "Downloading to %s (workers=%d, start=%d, backward=%t, limit=%d, delay=%s)\n",
 		outDir, workers, start, backward, limit, delay)
 	d := &downloader.Downloader{Workers: workers, OutDir: outDir, Out: cmd.OutOrStdout(), Backward: backward, Limit: limit, Delay: delay}
+	var tp *termProgress
+	if isTerminal(cmd.OutOrStdout()) {
+		tp = newTermProgress(cmd.OutOrStdout())
+		d.Out, d.Progress = tp, tp
+	}
 	s, runErr := d.Run(ctx, p, start)
+	if tp != nil {
+		tp.Wait() // flush the last log lines and clear the bars
+	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\nDownloaded %d file(s), skipped %d existing, range %d..%d, %d failure(s)\n",
 		s.Downloaded, s.Skipped, s.FirstIndex, s.StoppedAt-1, len(s.Failures))

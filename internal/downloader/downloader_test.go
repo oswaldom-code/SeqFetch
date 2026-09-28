@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,6 +46,58 @@ func (h *hitLog) span() time.Duration {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.at[len(h.at)-1].Sub(h.at[0])
+}
+
+// transfer is what a progressLog saw for one download.
+type transfer struct {
+	name   string
+	total  int64
+	bytes  int
+	closed bool
+}
+
+// progressLog is a downloader.Progress that records every transfer.
+type progressLog struct {
+	mu        sync.Mutex
+	transfers []*transfer
+}
+
+func (l *progressLog) Track(name string, total int64) io.WriteCloser {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t := &transfer{name: name, total: total}
+	l.transfers = append(l.transfers, t)
+	return &transferWriter{log: l, t: t}
+}
+
+func (l *progressLog) byName(name string) *transfer {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, t := range l.transfers {
+		if t.name == name {
+			return t
+		}
+	}
+	return nil
+}
+
+type transferWriter struct {
+	log *progressLog
+	t   *transfer
+}
+
+func (w *transferWriter) Write(p []byte) (int, error) {
+	w.log.mu.Lock()
+	defer w.log.mu.Unlock()
+	w.t.bytes += len(p)
+	return len(p), nil
+}
+
+func (w *transferWriter) Close() error {
+	w.log.mu.Lock()
+	defer w.log.mu.Unlock()
+	w.t.closed = true
+	return nil
 }
 
 // newServer serves /f/<n>.txt with body "file <n>" for 1 <= n <= last.
@@ -238,6 +291,53 @@ var _ = Describe("Run", func() {
 		d := &downloader.Downloader{Workers: 2, OutDir: outDir}
 		_, err = d.Run(ctx, p, 1)
 		Expect(err).To(MatchError(context.Canceled))
+	})
+
+	Describe("with Progress", func() {
+		It("tracks every download with its name, size and bytes, then closes it", func() {
+			srv, _ = newServer(2, nil)
+			p, err := pattern.Parse(srv.URL + "/f/{n}.txt")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(os.WriteFile(filepath.Join(outDir, "1.txt"), []byte("local"), 0o644)).To(Succeed())
+
+			log := &progressLog{}
+			d := &downloader.Downloader{Workers: 1, OutDir: outDir, Progress: log}
+			s, err := d.Run(context.Background(), p, 1)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(s.Downloaded).To(Equal(1))
+			// 1.txt was skipped and 3.txt is a miss: neither reaches Progress.
+			Expect(log.transfers).To(HaveLen(1))
+			Expect(log.byName("2.txt")).To(Equal(&transfer{name: "2.txt", total: 6, bytes: 6, closed: true}))
+		})
+
+		It("closes the tracker when a transfer breaks midway", func() {
+			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Length", "100")
+				io.WriteString(w, "half")
+				w.(http.Flusher).Flush()
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					conn.Close() // drop the connection before the body is complete
+				}
+			}))
+			p, err := pattern.Parse(srv.URL + "/f/{n}.txt")
+			Expect(err).NotTo(HaveOccurred())
+
+			log := &progressLog{}
+			d := &downloader.Downloader{Workers: 1, OutDir: outDir, Progress: log, Limit: 1}
+			s, err := d.Run(context.Background(), p, 1)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(s.Downloaded).To(Equal(0))
+			Expect(s.Failures).To(HaveLen(1))
+			t := log.byName("1.txt")
+			Expect(t).NotTo(BeNil())
+			Expect(t.total).To(Equal(int64(100)))
+			Expect(t.bytes).To(Equal(4))
+			Expect(t.closed).To(BeTrue())
+			Expect(filepath.Join(outDir, "1.txt")).NotTo(BeAnExistingFile())
+		})
 	})
 
 	Describe("with Delay", func() {

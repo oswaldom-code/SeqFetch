@@ -110,6 +110,10 @@ Behaviour:
   index at a time (`start-1`, `start-2`, ...) downloading what it finds, until
   an index is missing. Use it when you know one file in the middle of the
   sequence but not where it begins.
+- When stdout is a terminal, every download in flight shows a progress bar
+  (percentage, bytes, speed) that is replaced by its `OK` line once done;
+  responses without `Content-Length` show a spinner with the bytes so far.
+  Piped or redirected output keeps the plain log.
 - Files are named after the last path segment of the URL. When the
   placeholder is somewhere else (`https://host/id/{n}/200/300`) the index is
   prefixed to keep names unique: `10_300`, `11_300`, ...
