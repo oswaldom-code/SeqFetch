@@ -14,18 +14,31 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/oswaldom-code/seqfetch/internal/pattern"
 )
 
+// Progress is notified of every transfer so a UI can draw it. Track is
+// called once the response headers are in, total being the Content-Length
+// or -1 when unknown. The returned writer receives every byte written to
+// disk and is closed when the transfer ends, successfully or not.
+type Progress interface {
+	Track(name string, total int64) io.WriteCloser
+}
+
 // Downloader configures a run. Zero values fall back to sane defaults.
 type Downloader struct {
-	Client   *http.Client // defaults to http.DefaultClient
-	Workers  int          // defaults to 4
-	OutDir   string       // destination directory, must exist
-	Out      io.Writer    // progress output, defaults to io.Discard
-	Backward bool         // walk from start-1 down to the first 404/403 before going forward
-	Limit    int          // process at most this many indices in total; 0 means unlimited
+	Client   *http.Client  // defaults to http.DefaultClient
+	Workers  int           // defaults to 4
+	OutDir   string        // destination directory, must exist
+	Out      io.Writer     // progress output, defaults to io.Discard
+	Backward bool          // walk from start-1 down to the first 404/403 before going forward
+	Limit    int           // process at most this many indices in total; 0 means unlimited
+	Delay    time.Duration // minimum pause between HTTP requests across all workers; 0 means none
+	Progress Progress      // per-transfer progress sink, nil means none
+
+	pace pacer
 }
 
 // Summary reports what a run did.
@@ -75,6 +88,37 @@ func lowerBound(bound *atomic.Int64, n int) {
 	}
 }
 
+// pacer hands out request start times at least gap apart. It is shared by
+// all workers so the server sees at most one new request per gap.
+type pacer struct {
+	mu   sync.Mutex
+	next time.Time
+}
+
+// wait blocks until the next slot is due or ctx is cancelled. A zero gap
+// returns at once.
+func (pc *pacer) wait(ctx context.Context, gap time.Duration) error {
+	if gap <= 0 {
+		return nil
+	}
+	pc.mu.Lock()
+	at := pc.next
+	if now := time.Now(); at.Before(now) {
+		at = now
+	}
+	pc.next = at.Add(gap)
+	pc.mu.Unlock()
+
+	timer := time.NewTimer(time.Until(at))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // fetchOne downloads url into dest. It reports notFound for HTTP 404 and
 // 403 and removes any partially written file on error.
 func (d *Downloader) fetchOne(ctx context.Context, url, dest string) (notFound bool, err error) {
@@ -99,7 +143,13 @@ func (d *Downloader) fetchOne(ctx context.Context, url, dest string) (notFound b
 	if err != nil {
 		return false, err
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	w := io.Writer(f)
+	if d.Progress != nil {
+		t := d.Progress.Track(filepath.Base(dest), resp.ContentLength)
+		defer t.Close()
+		w = io.MultiWriter(f, t)
+	}
+	if _, err := io.Copy(w, resp.Body); err != nil {
 		f.Close()
 		os.Remove(dest)
 		return false, err
@@ -112,12 +162,15 @@ func (d *Downloader) fetchOne(ctx context.Context, url, dest string) (notFound b
 }
 
 // process handles a single index: skips it if the file already exists
-// locally, otherwise downloads it.
+// locally, otherwise waits for the next request slot and downloads it.
 func (d *Downloader) process(ctx context.Context, p *pattern.Pattern, n int) outcome {
 	url := p.URL(n)
 	dest := filepath.Join(d.OutDir, p.FileName(n))
 	if _, err := os.Stat(dest); err == nil {
 		return outcome{n: n, skipped: true}
+	}
+	if err := d.pace.wait(ctx, d.Delay); err != nil {
+		return outcome{n: n, err: fmt.Errorf("%s: %w", url, err)}
 	}
 	notFound, err := d.fetchOne(ctx, url, dest)
 	if err != nil {
@@ -252,6 +305,7 @@ func (d *Downloader) runForward(ctx context.Context, p *pattern.Pattern, start, 
 // Run downloads p from index start upward until the first 404/403. With
 // Backward set it first walks down from start-1 to the first missing index.
 // With Limit set it stops after that many indices regardless of misses.
+// With Delay set, HTTP requests start at least that far apart in total.
 // Files that already exist in OutDir are skipped without a request, so an
 // interrupted run can be resumed by re-running the same command.
 func (d *Downloader) Run(ctx context.Context, p *pattern.Pattern, start int) (Summary, error) {
