@@ -20,22 +20,31 @@ import (
 	"github.com/oswaldom-code/seqfetch/internal/pattern"
 )
 
-// hitLog records the indices requested, in order.
+// hitLog records the indices requested, in order, and when each arrived.
 type hitLog struct {
 	mu sync.Mutex
 	ns []int
+	at []time.Time
 }
 
 func (h *hitLog) add(n int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.ns = append(h.ns, n)
+	h.at = append(h.at, time.Now())
 }
 
 func (h *hitLog) count() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.ns)
+}
+
+// span returns how long passed between the first and the last hit.
+func (h *hitLog) span() time.Duration {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.at[len(h.at)-1].Sub(h.at[0])
 }
 
 // newServer serves /f/<n>.txt with body "file <n>" for 1 <= n <= last.
@@ -229,6 +238,64 @@ var _ = Describe("Run", func() {
 		d := &downloader.Downloader{Workers: 2, OutDir: outDir}
 		_, err = d.Run(ctx, p, 1)
 		Expect(err).To(MatchError(context.Canceled))
+	})
+
+	Describe("with Delay", func() {
+		It("spaces requests at least Delay apart across all workers", func() {
+			srv, hits := newServer(5, nil)
+			p, err := pattern.Parse(srv.URL + "/f/{n}.txt")
+			Expect(err).NotTo(HaveOccurred())
+
+			const delay = 50 * time.Millisecond
+			d := &downloader.Downloader{Workers: 4, OutDir: outDir, Delay: delay}
+			s, err := d.Run(context.Background(), p, 1)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(s.Downloaded).To(Equal(5))
+			// 1..5, the 404 at 6 and whatever the other workers had in flight.
+			n := hits.count()
+			Expect(n).To(BeNumerically(">=", 6))
+			// n requests means n-1 gaps of at least one delay each.
+			Expect(hits.span()).To(BeNumerically(">=", time.Duration(n-1)*delay))
+			expectFiles(1, 5)
+		})
+
+		It("does not spend a slot on files that already exist", func() {
+			srv, hits := newServer(5, nil)
+			p, err := pattern.Parse(srv.URL + "/f/{n}.txt")
+			Expect(err).NotTo(HaveOccurred())
+			for n := 1; n <= 4; n++ {
+				name := filepath.Join(outDir, fmt.Sprintf("%d.txt", n))
+				Expect(os.WriteFile(name, []byte("local"), 0o644)).To(Succeed())
+			}
+
+			const delay = 100 * time.Millisecond
+			d := &downloader.Downloader{Workers: 1, OutDir: outDir, Delay: delay}
+			began := time.Now()
+			s, err := d.Run(context.Background(), p, 1)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(s.Skipped).To(Equal(4))
+			Expect(hits.ns).To(Equal([]int{5, 6}))
+			// Only the gap between 5 and 6 waits; four skips plus the first
+			// request would have cost five delays otherwise.
+			Expect(time.Since(began)).To(BeNumerically("<", 3*delay))
+		})
+
+		It("stops waiting when the context is cancelled", func() {
+			srv, _ = newServer(5, nil)
+			p, err := pattern.Parse(srv.URL + "/f/{n}.txt")
+			Expect(err).NotTo(HaveOccurred())
+
+			ctx, cancel := context.WithCancel(context.Background())
+			time.AfterFunc(50*time.Millisecond, cancel)
+
+			d := &downloader.Downloader{Workers: 1, OutDir: outDir, Delay: time.Hour}
+			began := time.Now()
+			_, err = d.Run(ctx, p, 1)
+			Expect(err).To(MatchError(context.Canceled))
+			Expect(time.Since(began)).To(BeNumerically("<", 5*time.Second))
+		})
 	})
 
 	Describe("with Limit", func() {

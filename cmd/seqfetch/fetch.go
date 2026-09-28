@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -12,7 +13,7 @@ import (
 	"github.com/oswaldom-code/seqfetch/internal/pattern"
 )
 
-func runFetch(cmd *cobra.Command, template string, start, workers, limit int, outFlag string, backward bool) error {
+func runFetch(cmd *cobra.Command, template string, start, workers, limit int, delay time.Duration, outFlag string, backward bool) error {
 	p, err := pattern.Parse(template)
 	if err != nil {
 		return err
@@ -37,9 +38,9 @@ func runFetch(cmd *cobra.Command, template string, start, workers, limit int, ou
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer stop()
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Downloading to %s (workers=%d, start=%d, backward=%t, limit=%d)\n",
-		outDir, workers, start, backward, limit)
-	d := &downloader.Downloader{Workers: workers, OutDir: outDir, Out: cmd.OutOrStdout(), Backward: backward, Limit: limit}
+	fmt.Fprintf(cmd.OutOrStdout(), "Downloading to %s (workers=%d, start=%d, backward=%t, limit=%d, delay=%s)\n",
+		outDir, workers, start, backward, limit, delay)
+	d := &downloader.Downloader{Workers: workers, OutDir: outDir, Out: cmd.OutOrStdout(), Backward: backward, Limit: limit, Delay: delay}
 	s, runErr := d.Run(ctx, p, start)
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\nDownloaded %d file(s), skipped %d existing, range %d..%d, %d failure(s)\n",
@@ -58,6 +59,7 @@ func newFetchCmd() *cobra.Command {
 		start    int
 		workers  int
 		limit    int
+		delay    time.Duration
 		outFlag  string
 		backward bool
 	)
@@ -67,10 +69,11 @@ func newFetchCmd() *cobra.Command {
 		Example: `  seqfetch fetch "https://host.com/docs/{n}.pdf"
   seqfetch fetch "https://host.com/img/IMG_{n:04}.jpg" --start 100 --workers 8 --out ~/Pictures
   seqfetch fetch "https://host.com/docs/{n}.pdf" --start 123 --backward
-  seqfetch fetch "https://host.com/docs/{n}.pdf" --limit 2   # try the template on two files`,
+  seqfetch fetch "https://host.com/docs/{n}.pdf" --limit 2   # try the template on two files
+  seqfetch fetch "https://host.com/docs/{n}.pdf" --delay 2s  # be gentle: one request every 2s`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runFetch(cmd, args[0], start, workers, limit, outFlag, backward)
+			return runFetch(cmd, args[0], start, workers, limit, delay, outFlag, backward)
 		},
 	}
 	cmd.Flags().IntVar(&start, "start", 1, "first index of the sequence")
@@ -78,5 +81,6 @@ func newFetchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&outFlag, "out", "", "download directory (overrides the configured one)")
 	cmd.Flags().BoolVar(&backward, "backward", false, "also walk down from --start until the first missing index")
 	cmd.Flags().IntVar(&limit, "limit", 0, "process at most N indices in total, 0 means unlimited (useful to test a template)")
+	cmd.Flags().DurationVar(&delay, "delay", 0, "minimum pause between requests shared by all workers, e.g. 500ms or 2s (courtesy delay)")
 	return cmd
 }

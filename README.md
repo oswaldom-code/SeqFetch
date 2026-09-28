@@ -80,6 +80,7 @@ seqfetch fetch "https://host.com/docs/{n}.pdf"
 seqfetch fetch "https://host.com/img/IMG_{n:04}.jpg" --start 100 --workers 8 --out ~/Pictures
 seqfetch fetch "https://host.com/docs/{n}.pdf" --start 123 --backward   # finds 122, 121, ... then 124, 125, ...
 seqfetch fetch "https://host.com/docs/{n}.pdf" --limit 2                 # try the template on two files only
+seqfetch fetch "https://host.com/docs/{n}.pdf" --delay 2s                # be gentle: one request every 2s
 ```
 
 Flags for `fetch`:
@@ -91,6 +92,7 @@ Flags for `fetch`:
 | `--out`     |         | download directory, overrides the configured one    |
 | `--backward`| `false` | also walk down from `--start` to find the first file |
 | `--limit`   | `0`     | process at most N indices in total, 0 = unlimited   |
+| `--delay`   | `0`     | minimum pause between requests (`500ms`, `2s`), shared by all workers |
 
 Behaviour:
 
@@ -101,6 +103,9 @@ Behaviour:
 - `--limit N` stops after N indices have been processed (misses and skipped
   files count too), sharing the budget between the backward walk and the
   forward run. Handy to check a template before a long download.
+- `--delay D` is a courtesy delay: HTTP requests start at least `D` apart in
+  total, no matter how many workers run, so the server never sees a burst.
+  Files skipped because they already exist do not consume a slot.
 - With `--backward`, before going forward it walks down from `--start` one
   index at a time (`start-1`, `start-2`, ...) downloading what it finds, until
   an index is missing. Use it when you know one file in the middle of the
