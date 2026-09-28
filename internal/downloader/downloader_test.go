@@ -312,9 +312,9 @@ var _ = Describe("Run", func() {
 		})
 
 		It("closes the tracker when a transfer breaks midway", func() {
-			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Length", "100")
-				io.WriteString(w, "half")
+				fmt.Fprint(w, "half")
 				w.(http.Flusher).Flush()
 				conn, _, err := w.(http.Hijacker).Hijack()
 				if err == nil {
